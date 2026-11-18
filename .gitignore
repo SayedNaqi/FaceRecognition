@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Large model files (download with: python src/download_models.py)
+models/*.onnx
+
+# Private biometric data - never commit faces or embeddings
+data/registered_faces/
+models/face_embeddings.npz
+
+# Demo artifacts
+outputs/*.csv
+outputs/*.png
+!outputs/.gitkeep

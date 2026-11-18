@@ -1,0 +1,10 @@
+# Smart Face Recognition System - dependencies
+# Tested on: Python 3.12.10 | Windows 11 (x64)
+#
+# NOTE: opencv-contrib-python is used INSTEAD of opencv-python.
+# It provides cv2.FaceRecognizerSF (SFace) and cv2.FaceDetectorYN (YuNet).
+# Do NOT install opencv-python and opencv-contrib-python together.
+opencv-contrib-python==4.13.0.92
+numpy==2.5.4
+matplotlib==3.11.2
+pillow==13.0.0
