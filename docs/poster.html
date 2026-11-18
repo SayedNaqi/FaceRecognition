@@ -115,7 +115,7 @@
   <div class="title">
     <h1>سیستم شناسایی هوشمند چهره</h1>
     <div class="en">SMART FACE RECOGNITION SYSTEM</div>
-    <div class="tagline">پروژهٔ هوش مصنوعی و بینایی ماشین — <b>آفلاین، سریع و با حفظ حریم خصوصی</b>؛ چهرهٔ شما را «می‌بیند»، «می‌فهمد» و «می‌شناسد»</div>
+    <div class="tagline">پروژهٔ هوش مصنوعی و بینایی ماشین — <b>آفلاین، سریع و با حفظ حریم خصوصی</b>؛ چهره‌ات را ثبت کن، با یک نگاه وارد شو!</div>
   </div>
 
   <!-- ===== محتوای اصلی ===== -->
@@ -143,13 +143,13 @@
           <div class="arrow">→</div>
           <div class="step">Cosine<br><small>تطبیق هویت</small></div>
           <div class="arrow">→</div>
-          <div class="step">CSV<br><small>حضور و غیاب</small></div>
+          <div class="step">SQLite<br><small>افراد + حضور خودکار</small></div>
         </div>
       </div>
 
       <div class="stats">
         <div class="stat"><div class="n">128</div><div class="t">بُعد بردار اثرانگشت</div></div>
-        <div class="stat"><div class="n">0.36</div><div class="t">آستانهٔ شباهت استاندارد</div></div>
+        <div class="stat"><div class="n">99.5%</div><div class="t">دقت SFace روی معیار LFW</div></div>
         <div class="stat"><div class="n">&lt;20s</div><div class="t">زمان ثبت‌نام هر فرد</div></div>
         <div class="stat"><div class="n">100%</div><div class="t">آفلاین — بدون اینترنت</div></div>
       </div>
@@ -160,13 +160,13 @@
       <div class="card" style="flex:1;">
         <h2>✨ امکانات قابل نمایش</h2>
         <ul>
-          <li><b>ثبت‌نام از وب‌کم</b> با نمونه‌برداری خودکار و «امتیاز کیفیت» چهره</li>
-          <li><b>شناسایی زنده</b> چند نفر هم‌زمان؛ نام + درصد اطمینان روی تصویر</li>
+          <li><b>رابط گرافیکی حرفه‌ای</b> با رعایت اصول HCI — داشبورد، میانبرها، نوار وضعیت زنده</li>
+          <li><b>اسکن چهره چند زاویه‌ای</b> الهام‌گرفته از Face ID (۷ ناحیهٔ زاویه‌ای + کنترل کیفیت خودکار)</li>
+          <li><b>دیتابیس SQLite داخلی</b> — افراد، چهره‌ها و حضور همیشه ذخیره‌اند</li>
+          <li><b>شناسایی زنده</b> هم‌زمان چند نفر؛ نام + درصد اطمینان روی تصویر</li>
           <li><b>فرد ناشناس؟</b> کادر قرمز + برچسب Unknown — سیستم فقط افراد ثبت‌شده را می‌شناسد</li>
-          <li><b>حضور و غیاب خودکار</b> در فایل CSV (نام، تاریخ، ساعت) برای هر شناسایی</li>
-          <li><b>حالت تصویر</b>: شناسایی چهره‌ها در عکس‌های گروهی</li>
-          <li><b>اسکرین‌شات زنده</b> با یک کلید هنگام نمایش</li>
-          <li><b>تست خودکار سلامت</b> (selftest) برای اطمینان از آماده‌بودن سیستم</li>
+          <li><b>حضور و غیاب خودکار</b> در دیتابیس + خروجی CSV برای Excel</li>
+          <li><b>بررسی سلامت پروژه</b> با یک کلیک (مدل‌ها، دیتابیس، تشخیص)</li>
         </ul>
       </div>
       <div class="card">
@@ -190,10 +190,10 @@
         <h2>⚙️ اجرا در ۳ دستور</h2>
         <div dir="ltr" style="font-family:Consolas,monospace; font-size:12px; background:#0e3a45; color:#ffd97a; border-radius:5px; padding:10px 12px; line-height:2;">
           pip install -r requirements.txt<br>
-          python src/face_app.py enroll --name "Ahmad"<br>
-          python src/face_app.py recognize
+          python src/download_models.py<br>
+          python src/gui.py
         </div>
-        <p style="font-size:12px; margin-top:8px; color:#555;">Python 3.12 | OpenCV 4.13 | YuNet + SFace (ONNX) | NumPy — بدون نیاز به GPU</p>
+        <p style="font-size:12px; margin-top:8px; color:#555;">Python 3.12 | CustomTkinter | OpenCV 4.13 | YuNet + SFace | SQLite — بدون GPU</p>
       </div>
     </div>
 

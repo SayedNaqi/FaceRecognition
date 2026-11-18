@@ -7,8 +7,12 @@ __pycache__/
 # Large model files (download with: python src/download_models.py)
 models/*.onnx
 
-# Private biometric data - never commit faces or embeddings
+# Private biometric data - never commit faces, embeddings or the database
 data/registered_faces/
+data/face_recognition.db
+data/face_recognition.db-wal
+data/face_recognition.db-shm
+data/profiles/
 models/face_embeddings.npz
 
 # Demo artifacts
