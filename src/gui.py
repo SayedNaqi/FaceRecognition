@@ -27,6 +27,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from db import Database, PROFILES_DIR
 from face_engine import FaceEngine, COSINE_THRESHOLD, models_present, cosine_sim
+from ui_kit import (
+    icon, ctk_img, GradientButton, Toast, match_gauge,
+    AnimatedHero, gradient_pill,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_IMAGE = PROJECT_ROOT / "data" / "images" / "test.jpg"
@@ -242,17 +246,19 @@ def make_ctk_image(pil_img, size=None):
 # =====================================================
 
 class NavButton(ctk.CTkFrame):
-    """Sidebar item: accent selection bar + icon + label."""
+    """Sidebar item: animated accent bar + vector icon + label."""
 
-    def __init__(self, master, icon, label, command):
+    def __init__(self, master, icon_name, label, command):
         super().__init__(master, fg_color="transparent", height=48)
         self.grid_columnconfigure(1, weight=1)
         self.grid_propagate(False)
         self.bar = ctk.CTkFrame(self, width=4, height=30, corner_radius=2,
                                 fg_color="transparent")
         self.bar.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=9)
-        self.button = ctk.CTkButton(self, text=f"{icon}   {label}",
-                                    font=load_font(14), height=46,
+        self.bar.grid_propagate(False)
+        self._ic = ctk_img(icon(icon_name, 22, TEXT))
+        self.button = ctk.CTkButton(self, image=self._ic, text=f"   {label}",
+                                    compound="left", font=load_font(14), height=46,
                                     anchor="w", fg_color="transparent",
                                     hover_color=SIDEBAR_2, text_color=TEXT,
                                     corner_radius=12, command=command)
@@ -262,10 +268,20 @@ class NavButton(ctk.CTkFrame):
         self.bar.configure(fg_color=(CYAN if active else "transparent"))
         self.button.configure(fg_color=(SIDEBAR_2 if active else "transparent"),
                               text_color=(CYAN if active else TEXT))
+        if active:  # tiny pulse animation on the accent bar
+            self._pulse(6)
+
+    def _pulse(self, width):
+        try:
+            self.bar.configure(width=width)
+            if width > 4:
+                self.after(70, lambda: self._pulse(width - 1))
+        except Exception:
+            pass
 
 
 class StatCard(ctk.CTkFrame):
-    def __init__(self, master, icon, title, accent):
+    def __init__(self, master, icon_name, title, accent):
         super().__init__(master, fg_color=CARD, border_color=BORDER,
                          border_width=1, corner_radius=18)
         self.grid_columnconfigure(0, weight=1)
@@ -273,8 +289,8 @@ class StatCard(ctk.CTkFrame):
                             width=44, height=44)
         chip.grid(row=0, column=0, sticky="e", padx=12, pady=(12, 2))
         chip.grid_propagate(False)
-        ctk.CTkLabel(chip, text=icon, font=ctk.CTkFont(size=21)).place(
-            relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(chip, image=ctk_img(icon(icon_name, 22, accent)),
+                     text="").place(relx=0.5, rely=0.5, anchor="center")
         self.value = ctk.CTkLabel(self, text="0", font=load_font(26, True),
                                   text_color=accent)
         self.value.grid(row=1, column=0, sticky="e", padx=14)
@@ -347,15 +363,15 @@ class FaceRecognitionApp(ctk.CTk):
             row=1, column=0, sticky="ew", padx=22, pady=(12, 16))
 
         nav = [
-            ("dashboard", "🏠", "داشبورد زنده"),
-            ("enroll",    "✨", "ثبت فرد جدید"),
-            ("people",    "👥", "افراد ثبت‌شده"),
-            ("report",    "📋", "گزارش حضور"),
-            ("settings",  "⚙️", "تنظیمات و سلامت"),
+            ("dashboard", "home",      "داشبورد زنده"),
+            ("enroll",    "add_user",  "ثبت فرد جدید"),
+            ("people",    "users",     "افراد ثبت‌شده"),
+            ("report",    "report",    "گزارش حضور"),
+            ("settings",  "settings",  "تنظیمات و سلامت"),
         ]
         self._nav_buttons = []
-        for i, (key, icon, label) in enumerate(nav):
-            btn = NavButton(sidebar, icon, label,
+        for i, (key, icon_name, label) in enumerate(nav):
+            btn = NavButton(sidebar, icon_name, label,
                             command=lambda k=key: self.show_screen(k))
             btn.grid(row=2 + i, column=0, sticky="ew", padx=12, pady=3)
             self._nav_buttons.append((key, btn))
@@ -469,16 +485,8 @@ class FaceRecognitionApp(ctk.CTk):
         return count
 
     def _toast(self, message, ok=True):
-        toast = ctk.CTkToplevel(self)
-        toast.overrideredirect(True)
-        toast.attributes("-topmost", True)
-        x = self.winfo_rootx() + self.winfo_width() // 2 - 180
-        y = self.winfo_rooty() + 22
-        toast.geometry(f"360x48+{x}+{y}")
-        toast.configure(fg_color=(GOOD if ok else BAD))
-        ctk.CTkLabel(toast, text=message, text_color="#08120d",
-                     font=load_font(13, True)).pack(expand=True)
-        toast.after(1800, toast.destroy)
+        # Floating toast with fade-in / fade-out animation
+        Toast(self, message, ok)
 
     def _status(self, text, ok=True):
         self.status_label.configure(text=f"●  {text}",
@@ -508,10 +516,19 @@ class FaceRecognitionApp(ctk.CTk):
         scr.grid_columnconfigure(0, weight=3)
         scr.grid_columnconfigure(1, weight=2)
 
-        # ---- hero banner ----
-        hero_img = make_ctk_image(make_hero_banner(940, 118))
-        hero = ctk.CTkLabel(scr, image=hero_img, text="")
-        hero.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        # ---- animated hero banner (dynamic glow + Persian overlay) ----
+        hero_box = ctk.CTkFrame(scr, fg_color="transparent", height=118)
+        hero_box.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        hero_box.grid_propagate(False)
+        self._hero = AnimatedHero(hero_box, 940, 118)
+        self._hero.pack(fill="x")
+        ctk.CTkLabel(hero_box, text="به چهره‌یاب خوش آمدید",
+                     font=load_font(19, True), text_color=TEXT).place(
+            relx=0.955, rely=0.30, anchor="e")
+        ctk.CTkLabel(hero_box,
+                     text="ثبت چهره   ·   شناسایی زنده   ·   حضور خودکار",
+                     font=load_font(11), text_color="#bae6fd").place(
+            relx=0.955, rely=0.56, anchor="e")
 
         # ---- camera card ----
         cam_card = ctk.CTkFrame(scr, fg_color=CARD, border_color=BORDER,
@@ -541,10 +558,11 @@ class FaceRecognitionApp(ctk.CTk):
 
         ctl = ctk.CTkFrame(cam_card, fg_color="transparent")
         ctl.grid(row=2, column=0, sticky="ew", padx=18, pady=(4, 18))
-        self._cam_toggle_btn = ctk.CTkButton(
-            ctl, text="▶   شروع دوربین", font=load_font(15, True), height=48,
-            fg_color=CYAN, hover_color="#67e8f9", text_color=ON_CYAN,
-            corner_radius=14, command=self._toggle_dash_camera)
+        self._cam_toggle_btn = GradientButton(
+            ctl, text="شروع دوربین", icon_name="camera",
+            c1=CYAN, c2="#06b6d4", text_color=ON_CYAN,
+            width=190, height=48, font=load_font(15, True),
+            command=self._toggle_dash_camera)
         self._cam_toggle_btn.pack(side="right")
         faces_chip = ctk.CTkFrame(ctl, fg_color=CARD_2, corner_radius=10)
         faces_chip.pack(side="left")
@@ -560,11 +578,11 @@ class FaceRecognitionApp(ctk.CTk):
 
         stats = ctk.CTkFrame(right, fg_color="transparent")
         stats.pack(fill="x")
-        self._stat_people = StatCard(stats, "👥", "افراد ثبت‌شده", CYAN)
+        self._stat_people = StatCard(stats, "users", "افراد ثبت‌شده", CYAN)
         self._stat_people.pack(side="right", fill="x", expand=True, padx=(0, 8))
-        self._stat_today = StatCard(stats, "✅", "حضور امروز", GOOD)
+        self._stat_today = StatCard(stats, "check", "حضور امروز", GOOD)
         self._stat_today.pack(side="right", fill="x", expand=True, padx=(0, 8))
-        self._stat_model = StatCard(stats, "🧠", "وضعیت مدل‌ها", MAGENTA)
+        self._stat_model = StatCard(stats, "shield", "وضعیت مدل‌ها", MAGENTA)
         self._stat_model.pack(side="right", fill="x", expand=True)
 
         # last recognition card with pulsing border
@@ -588,10 +606,9 @@ class FaceRecognitionApp(ctk.CTk):
         self._last_meta = ctk.CTkLabel(body, text="هنوز شناسایی‌ای انجام نشده",
                                        font=load_font(11), text_color=MUTED)
         self._last_meta.pack(pady=(4, 12))
-        self._match_bar = ctk.CTkProgressBar(body, width=230, progress_color=CYAN,
-                                             fg_color=CARD_2, height=14)
-        self._match_bar.set(0)
-        self._match_bar.pack()
+        self._gauge_img = ctk_img(match_gauge(0.0, 116))
+        self._match_gauge = ctk.CTkLabel(body, image=self._gauge_img, text="")
+        self._match_gauge.pack()
         self._match_pct = ctk.CTkLabel(body, text="", font=load_font(11),
                                        text_color=MUTED)
         self._match_pct.pack(pady=(6, 0))
@@ -632,8 +649,8 @@ class FaceRecognitionApp(ctk.CTk):
             messagebox.showerror("خطا", "دوربین باز نشد. اتصال و اجازهٔ دسترسی را بررسی کنید.")
             return
         self._dash_running = True
-        self._cam_toggle_btn.configure(text="■   توقف دوربین", fg_color=BAD,
-                                       hover_color="#fda4af", text_color="#2b0d12")
+        self._cam_toggle_btn.configure(text="توقف دوربین", text_color="#2b0d12")
+        self._cam_toggle_btn.set_gradient(BAD, "#fb923c")
         self._idle_hint.grid_forget()
         self._refresh_mean_embeddings()
         self._status("دوربین روشن است")
@@ -645,8 +662,8 @@ class FaceRecognitionApp(ctk.CTk):
             self._dash_cam.release()
             self._dash_cam = None
         try:
-            self._cam_toggle_btn.configure(text="▶   شروع دوربین", fg_color=CYAN,
-                                           hover_color="#67e8f9", text_color=ON_CYAN)
+            self._cam_toggle_btn.configure(text="شروع دوربین", text_color=ON_CYAN)
+            self._cam_toggle_btn.set_gradient(CYAN, "#06b6d4")
             self._cam_label.configure(image=None)
             if not self._idle_hint.grid_info():
                 self._idle_hint.grid()
@@ -664,10 +681,35 @@ class FaceRecognitionApp(ctk.CTk):
             self._stop_dash_camera()
             return
 
-        engine = self._get_engine()
+        try:
+            engine = self._get_engine()
+            faces = engine.detect(frame)
+        except Exception as exc:
+            self._status(f"خطای مدل: {exc}", ok=False)
+            self._stop_dash_camera()
+            return
         display = frame.copy()
-        faces = engine.detect(frame)
         threshold = float(self.db.get_setting("match_threshold", COSINE_THRESHOLD))
+
+        # ---- camera HUD: radar rings, brackets, LIVE badge ----
+        fh, fw = display.shape[:2]
+        t = time.time()
+        cx, cy = fw // 2, fh // 2
+        pulse = int(18 * (1 + math.sin(t * 2.2)) / 2)
+        for rr in (105 + pulse, 165 + pulse):
+            for a0 in range(0, 360, 45):
+                cv2.ellipse(display, (cx, cy), (rr, int(rr * 0.72)), 0,
+                            a0 + 8, a0 + 34, (60, 70, 120), 1, cv2.LINE_AA)
+        bm, bl = 12, 34
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            px = bm if sx > 0 else fw - bm
+            py = bm if sy > 0 else fh - bm
+            cv2.line(display, (px, py), (px - sx * bl, py), (34, 211, 238), 2)
+            cv2.line(display, (px, py), (px, py - sy * bl), (34, 211, 238), 2)
+        cv2.putText(display, "LIVE", (22, fh - 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (34, 211, 238), 2, cv2.LINE_AA)
+        cv2.putText(display, datetime.now().strftime("%H:%M:%S"), (fw - 110, fh - 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 170, 200), 1, cv2.LINE_AA)
 
         best_show = None
         for f in faces:
@@ -680,18 +722,27 @@ class FaceRecognitionApp(ctk.CTk):
             known = best_id is not None and best_sim >= threshold
             x, y, w, h = [int(v) for v in f[:4]]
             color = (52, 211, 153) if known else (251, 113, 133)
-            cv2.rectangle(display, (x, y), (x + w, y + h), color, 2)
-            cv2.rectangle(display, (x, y + h - 3), (x + w, y + h), color, -1)
+
+            # corner-bracket face box + confidence rail
+            arm = max(10, min(w, h) // 4)
+            for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                px = x if sx > 0 else x + w
+                py = y if sy > 0 else y + h
+                cv2.line(display, (px, py), (px - sx * arm, py), color, 3)
+                cv2.line(display, (px, py), (px, py - sy * arm), color, 3)
+            cv2.rectangle(display, (x, y + h + 5), (x + w, y + h + 9), (45, 49, 89), -1)
+            cv2.rectangle(display, (x, y + h + 5),
+                          (x + int(w * max(0.0, min(1.0, best_sim))), y + h + 9),
+                          color, -1)
             if known:
                 person = self.db.get_person(best_id)
-                name = person["full_name"] if person else str(best_id)
-                caption = f"{name}  {best_sim * 100:.0f}%"
+                caption = f"MATCH  {best_sim * 100:.0f}%"
                 self._log_attendance_gui(best_id)
                 best_show = (person, best_sim)
             else:
-                caption = f"Unknown  {best_sim * 100:.0f}%"
+                caption = f"UNKNOWN  {best_sim * 100:.0f}%"
             cv2.putText(display, caption, (x, max(y - 10, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.62, color, 2, cv2.LINE_AA)
 
         if best_show:
             self._show_last_recognition(best_show[0], best_show[1])
@@ -726,8 +777,9 @@ class FaceRecognitionApp(ctk.CTk):
         meta = "  ·  ".join(p for p in [person.get("student_id"),
                                         person.get("department")] if p)
         self._last_meta.configure(text=meta or "—")
-        self._match_bar.set(max(0.0, min(1.0, sim)))
-        self._match_bar.configure(progress_color=(GOOD if sim >= 0.363 else WARN))
+        self._gauge_img = ctk_img(match_gauge(sim, 116))
+        self._match_gauge.configure(image=self._gauge_img)
+        self._match_gauge._image = self._gauge_img
         self._match_pct.configure(text=f"شباهت:  {sim * 100:.1f}٪")
         # pulse the card border (delight!)
         try:
@@ -786,12 +838,12 @@ class FaceRecognitionApp(ctk.CTk):
 
         btn_row = ctk.CTkFrame(form, fg_color="transparent")
         btn_row.pack(fill="x", padx=10, pady=(4, 18))
-        self._scan_btn = ctk.CTkButton(btn_row, text="✨   شروع اسکن چهره",
-                                       font=load_font(14, True), height=46,
-                                       fg_color=VIOLET, hover_color="#a78bfa",
-                                       text_color="#ffffff", corner_radius=14,
-                                       command=self._start_scan)
-        self._scan_btn.pack(side="right", fill="x", expand=True, padx=(0, 8))
+        self._scan_btn = GradientButton(
+            btn_row, text="شروع اسکن چهره", icon_name="sparkles",
+            c1=VIOLET, c2=MAGENTA, text_color="#ffffff",
+            width=230, height=46, font=load_font(14, True),
+            command=self._start_scan)
+        self._scan_btn.pack(side="right", padx=(0, 8))
         ctk.CTkButton(btn_row, text="پاک کردن", font=load_font(12), height=46,
                       fg_color=CARD_2, hover_color=BORDER, text_color=TEXT,
                       corner_radius=14,
@@ -849,11 +901,12 @@ class FaceRecognitionApp(ctk.CTk):
                       fg_color=CARD_2, hover_color=BAD, text_color=TEXT,
                       corner_radius=12, height=40,
                       command=self._cancel_scan).pack(side="right")
-        self._finish_btn = ctk.CTkButton(btn_row2, text="پایان و ذخیره ✓",
-                                         font=load_font(12, True), height=40,
-                                         fg_color=CARD_2, text_color=MUTED,
-                                         state="disabled", corner_radius=12,
-                                         command=self._finish_scan)
+        self._finish_btn = GradientButton(
+            btn_row2, text="پایان و ذخیره", icon_name="check",
+            c1=GOOD, c2="#0ea5e9", text_color="#08120d",
+            width=170, height=40, font=load_font(12, True),
+            command=self._finish_scan)
+        self._finish_btn.set_disabled(True)
         self._finish_btn.pack(side="left")
 
         return scr
@@ -910,8 +963,8 @@ class FaceRecognitionApp(ctk.CTk):
             "last_capture": 0.0,
             "started": time.time(),
         }
-        self._scan_btn.configure(state="disabled")
-        self._finish_btn.configure(state="disabled")
+        self._scan_btn.set_disabled(True)
+        self._finish_btn.set_disabled(True)
         self._status("در حال اسکن چهره")
         self._enroll_loop()
 
@@ -929,9 +982,14 @@ class FaceRecognitionApp(ctk.CTk):
             self._cancel_scan()
             return
 
-        engine = self._get_engine()
+        try:
+            engine = self._get_engine()
+            faces = engine.detect(frame)
+        except Exception as exc:
+            self._status(f"خطای مدل: {exc}", ok=False)
+            self._cancel_scan()
+            return
         display = frame.copy()
-        faces = engine.detect(frame)
         faces = [f for f in faces if f[2] >= 50 and f[3] >= 50]
 
         # animated scanning arc around the face guide
@@ -942,6 +1000,33 @@ class FaceRecognitionApp(ctk.CTk):
         cv2.ellipse(display, center, axes, 0, 0, 360, (45, 49, 89), 2)
         cv2.ellipse(display, center, axes, 0, int(self._scan_angle),
                     int(self._scan_angle + 80), (34, 211, 238), 4)
+
+        # 7 Face-ID-style checkpoint dots + direction cue + live counter
+        for i, zone in enumerate(ZONE_ORDER):
+            ang = math.radians(-90 + i * (360 / len(ZONE_ORDER)))
+            dx = int(center[0] + axes[0] * math.cos(ang))
+            dy = int(center[1] + axes[1] * math.sin(ang))
+            done = st["counts"][zone] >= st["zones"][zone]
+            cv2.circle(display, (dx, dy), 7 if done else 5,
+                       (52, 211, 153) if done else (95, 100, 150), -1, cv2.LINE_AA)
+        missing_now = self._missing_zones()
+        if missing_now:
+            mz = missing_now[0]
+            if mz in ("slight_left", "far_left"):
+                cv2.arrowedLine(display, (center[0] + 26, 40), (center[0] - 16, 40),
+                                (232, 121, 249), 3, tipLength=0.35)
+            elif mz in ("slight_right", "far_right"):
+                cv2.arrowedLine(display, (center[0] - 16, 40), (center[0] + 26, 40),
+                                (232, 121, 249), 3, tipLength=0.35)
+            elif mz == "up":
+                cv2.arrowedLine(display, (center[0], 62), (center[0], 22),
+                                (232, 121, 249), 3, tipLength=0.35)
+            elif mz == "down":
+                cv2.arrowedLine(display, (center[0], 22), (center[0], 62),
+                                (232, 121, 249), 3, tipLength=0.35)
+        cv2.putText(display, f"SCAN {len(st['samples'])}/{sum(st['zones'].values())}",
+                    (16, hgt - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (34, 211, 238), 2, cv2.LINE_AA)
 
         now = time.time()
         if len(faces) == 1:
@@ -984,8 +1069,7 @@ class FaceRecognitionApp(ctk.CTk):
             self._scan_progress.set(min(1.0, total / target_total))
             self._scan_count.configure(text=f"{total} / {target_total} نمونه")
             if total >= 12:
-                self._finish_btn.configure(state="normal", fg_color=GOOD,
-                                           text_color="#08120d")
+                self._finish_btn.set_disabled(False)
 
             if missing:
                 self._scan_instruction.configure(text=MISSING_PROMPT[missing[0]],
@@ -1027,9 +1111,8 @@ class FaceRecognitionApp(ctk.CTk):
         was_active = self._enroll_state is not None
         self._enroll_state = None
         self._release_enroll_camera()
-        self._scan_btn.configure(state="normal")
-        self._finish_btn.configure(state="disabled", fg_color=CARD_2,
-                                   text_color=MUTED)
+        self._scan_btn.set_disabled(False)
+        self._finish_btn.set_disabled(True)
         self._scan_preview.configure(image=None,
                                      text="پس از پر کردن مشخصات،\n«شروع اسکن چهره» را بزنید")
         self._scan_instruction.configure(text="آماده برای اسکن", text_color=CYAN)
@@ -1068,9 +1151,8 @@ class FaceRecognitionApp(ctk.CTk):
 
         name = st["person"]["full_name"]
         self._enroll_state = None
-        self._scan_btn.configure(state="normal")
-        self._finish_btn.configure(state="disabled", fg_color=CARD_2,
-                                   text_color=MUTED)
+        self._scan_btn.set_disabled(False)
+        self._finish_btn.set_disabled(True)
         self._refresh_mean_embeddings()
         self._refresh_people_count()
         self._status(f"«{name}» ثبت شد")
@@ -1110,14 +1192,14 @@ class FaceRecognitionApp(ctk.CTk):
 
         row = ctk.CTkFrame(win, fg_color="transparent")
         row.pack(pady=12)
-        ctk.CTkButton(row, text="مشاهدهٔ فهرست افراد", font=load_font(12, True),
-                      fg_color=CARD_2, hover_color=BORDER, text_color=TEXT,
-                      corner_radius=12, height=40,
-                      command=lambda: go("people")).pack(side="right", padx=6)
-        ctk.CTkButton(row, text="ثبت فرد دیگر", font=load_font(12, True),
-                      fg_color=CYAN, hover_color="#67e8f9", text_color=ON_CYAN,
-                      corner_radius=12, height=40,
-                      command=lambda: go("enroll")).pack(side="left", padx=6)
+        GradientButton(row, text="مشاهدهٔ فهرست افراد", icon_name="users",
+                       c1="#3a3e63", c2="#4a4f78", text_color=TEXT,
+                       width=190, height=40, font=load_font(12, True),
+                       command=lambda: go("people")).pack(side="right", padx=6)
+        GradientButton(row, text="ثبت فرد دیگر", icon_name="add_user",
+                       c1=CYAN, c2="#06b6d4", text_color=ON_CYAN,
+                       width=160, height=40, font=load_font(12, True),
+                       command=lambda: go("enroll")).pack(side="left", padx=6)
 
     def _on_escape(self):
         if self._enroll_state is not None:
@@ -1136,17 +1218,28 @@ class FaceRecognitionApp(ctk.CTk):
         top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ctk.CTkLabel(top, text="افراد ثبت‌شده", font=load_font(21, True),
                      text_color=TEXT).pack(side="right")
+        # gradient-bordered search field
+        search_wrap = ctk.CTkFrame(top, fg_color="transparent", width=320, height=42)
+        search_wrap.pack(side="right", padx=(0, 14))
+        search_wrap.pack_propagate(False)
+        search_bg = ctk.CTkLabel(
+            search_wrap,
+            image=ctk_img(gradient_pill(320, 42, CYAN, VIOLET, radius=14)),
+            text="")
+        search_bg.place(relx=0.5, rely=0.5, anchor="center")
         self._search_entry = ctk.CTkEntry(
-            top, placeholder_text="🔍  جستجو: نام، شمارهٔ کارت، دانشکده…",
-            width=320, height=40, justify="right", font=load_font(12),
-            fg_color=CARD_2, border_color=BORDER, border_width=1,
-            text_color=TEXT, placeholder_text_color=MUTED)
-        self._search_entry.pack(side="right", padx=(0, 14))
+            search_wrap, placeholder_text="جستجو: نام، شمارهٔ کارت، دانشکده…",
+            justify="right", font=load_font(12), fg_color=CARD,
+            border_width=0, text_color=TEXT, placeholder_text_color=MUTED,
+            height=36)
+        self._search_entry.place(relx=0.5, rely=0.5, anchor="center",
+                                 relwidth=0.985, relheight=0.86)
+        self._search_entry._search_bg = search_bg
         self._search_entry.bind("<KeyRelease>", lambda e: self._refresh_people())
-        ctk.CTkButton(top, text="✨  افزودن فرد", font=load_font(12, True),
-                      fg_color=CYAN, hover_color="#67e8f9", text_color=ON_CYAN,
-                      corner_radius=12, height=40,
-                      command=lambda: self.show_screen("enroll")).pack(side="left")
+        GradientButton(top, text="افزودن فرد", icon_name="add_user",
+                       c1=CYAN, c2="#06b6d4", text_color=ON_CYAN,
+                       width=165, height=40, font=load_font(12, True),
+                       command=lambda: self.show_screen("enroll")).pack(side="left")
 
         self._people_list = ctk.CTkScrollableFrame(scr, fg_color=CARD,
                                                    border_color=BORDER,
@@ -1235,10 +1328,10 @@ class FaceRecognitionApp(ctk.CTk):
             command=lambda v: self._refresh_report())
         self._report_scope.set("امروز")
         self._report_scope.pack(side="left", padx=(12, 0))
-        ctk.CTkButton(top, text="⬇  خروجی CSV", font=load_font(12, True),
-                      fg_color=VIOLET, hover_color="#a78bfa", text_color="#fff",
-                      corner_radius=12, height=40,
-                      command=self._export_csv).pack(side="left")
+        GradientButton(top, text="خروجی CSV", icon_name="download",
+                       c1=VIOLET, c2=MAGENTA, text_color="#ffffff",
+                       width=160, height=40, font=load_font(12, True),
+                       command=self._export_csv).pack(side="left")
 
         count_chip = ctk.CTkFrame(top, fg_color=CARD_2, corner_radius=10)
         count_chip.pack(side="left", padx=12)
@@ -1369,11 +1462,11 @@ class FaceRecognitionApp(ctk.CTk):
                                           fg_color=CARD_2, text_color=TEXT)
         self._health_box.pack(fill="x", padx=18, pady=4)
         self._health_box.insert("1.0", "برای اجرای بررسی «اجرای تست» را بزنید…")
-        ctk.CTkButton(card2, text="اجرای تست سلامت", font=load_font(12, True),
-                      fg_color=CYAN, hover_color="#67e8f9", text_color=ON_CYAN,
-                      corner_radius=12, height=42,
-                      command=self._run_health_check).pack(anchor="e",
-                                                           padx=18, pady=(6, 16))
+        GradientButton(card2, text="اجرای تست سلامت", icon_name="pulse",
+                       c1=CYAN, c2="#06b6d4", text_color=ON_CYAN,
+                       width=190, height=42, font=load_font(12, True),
+                       command=self._run_health_check).pack(anchor="e",
+                                                            padx=18, pady=(6, 16))
 
         # --- backup ---
         card3 = ctk.CTkFrame(scr, fg_color=CARD, border_color=BORDER,
@@ -1383,11 +1476,11 @@ class FaceRecognitionApp(ctk.CTk):
                      text_color=TEXT).pack(anchor="e", padx=18, pady=(14, 2))
         ctk.CTkLabel(card3, text="یک کپی از دیتابیس (افراد + چهره‌ها + حضور) ذخیره می‌شود.",
                      font=load_font(11), text_color=MUTED).pack(anchor="e", padx=18)
-        ctk.CTkButton(card3, text="ذخیرهٔ پشتیبان دیتابیس", font=load_font(12, True),
-                      fg_color=CARD_2, hover_color=BORDER, text_color=TEXT,
-                      corner_radius=12, height=42,
-                      command=self._backup_db).pack(anchor="e", padx=18,
-                                                    pady=(8, 16))
+        GradientButton(card3, text="ذخیرهٔ پشتیبان دیتابیس", icon_name="database",
+                       c1=VIOLET, c2="#2563eb", text_color="#ffffff",
+                       width=225, height=42, font=load_font(12, True),
+                       command=self._backup_db).pack(anchor="e", padx=18,
+                                                     pady=(8, 16))
 
         # --- about ---
         card4 = ctk.CTkFrame(scr, fg_color=CARD, border_color=BORDER,
