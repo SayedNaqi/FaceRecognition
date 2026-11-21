@@ -292,6 +292,7 @@ function drawMatches(ctx, canvas, matches) {
 
 /* ---------------- recognition ---------------- */
 let lastMatches = [];
+let scanConfirms = {};
 
 async function startRecognition() {
   if (recogTimer) clearInterval(recogTimer);
@@ -308,11 +309,16 @@ async function startRecognition() {
       if (!res.ok) return;
       const data = await res.json();
       lastMatches = data.matches;
+      const known = data.matches.filter((m) => m.known);
+      if (known.length) {
+        for (const m of known) scanConfirms[m.person_id] = (scanConfirms[m.person_id] || 0) + 1;
+        const m = known.sort((a, b) => b.sim - a.sim)[0];
+        if (scanConfirms[m.person_id] >= 3) showLastKnown(m);
+      } else scanConfirms = {};
       const ctx = canvas.getContext("2d");
       drawFrame(ctx, canvas);
       drawMatches(ctx, canvas, lastMatches);
       $("faces-count").textContent = fa(lastMatches.length);
-      if (data.last_known) showLastKnown(data.last_known);
       const now = performance.now();
       fpsHistory.push(now);
       fpsHistory = fpsHistory.filter((t) => now - t < 1000);
@@ -461,7 +467,32 @@ async function analyzeStep() {
     const a = await res.json();
     if (!a.ok) {
       $("scan-reason").textContent = a.reason_text || "";
+      scanState.frontal = 0;
       return;
+    }
+    // active-liveness check: 5+ consecutive frontal frames without turn => warning
+    if (a.yaw_zone === "center" && a.pitch_zone === "level") {
+      scanState.frontal = (scanState.frontal || 0) + 1;
+    } else {
+      scanState.frontal = 0;
+    }
+    if (scanState.frontal > 0) {
+      $("scan-reason").textContent =
+        scanState.frontal > 8
+          ? "لطفاً صورت خود را کامل‌تر به چپ یا راست بچرخانید — حاضری بررسی شد"
+          : "";
+      if (scanState.frontal > 8) {
+        const stroke = document.createElement("canvas");
+        stroke.className = "scan-reason";
+        stroke.style.fontSize = "11px";
+        stroke.style.color = "var(--magenta)";
+        stroke.textContent = "⚠ حاضری چک شد — بیشتر نگاه کنید!";
+        stroke.style.textShadow = "0 2px 8px #000";
+        document.querySelector(".scan-stage").appendChild(stroke);
+        setTimeout(() => stroke.remove(), 1400);
+      }
+    } else {
+      $("scan-reason").textContent = "";
     }
     $("scan-reason").textContent = "";
     if (now - scanState.lastCapture < 450) return;

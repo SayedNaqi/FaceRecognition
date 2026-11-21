@@ -8,7 +8,8 @@
 # ============================================================
 
 import base64
-import io
+import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -201,6 +202,8 @@ def api_recognize():
             "known": known,
             "person_id": best_id,
             "name": person["full_name"] if person else None,
+            "sid": person.get("student_id") if person else None,
+            "dept": person.get("department") if person else None,
         })
         if known:
             now = datetime.now()
@@ -211,6 +214,7 @@ def api_recognize():
                         db.add_attendance(best_id)
                     _att_cache[best_id] = now
             last_known = {
+                "person_id": best_id,
                 "full_name": person["full_name"],
                 "student_id": person.get("student_id"),
                 "department": person.get("department"),
@@ -329,8 +333,18 @@ def api_export():
 
 @app.get("/api/backup")
 def api_backup():
+    """Safe backup: SQLite backup API handles WAL state correctly."""
     with db_session() as db:
-        path = Path(db.path)
+        src = db._conn
+        fd, path = tempfile.mkstemp(suffix=".db", prefix="facerec_backup_")
+        os.close(fd)
+        try:
+            dst = sqlite3.connect(path)
+            src.backup(dst)
+            dst.close()
+        except Exception:
+            Path(path).unlink(missing_ok=True)
+            raise
     fname = f"face_recognition_backup_{datetime.now():%Y%m%d_%H%M%S}.db"
     return send_file(path, as_attachment=True, download_name=fname,
                      mimetype="application/x-sqlite3")

@@ -208,11 +208,13 @@ class Database:
             "SELECT COUNT(DISTINCT person_id) FROM attendance"
             " WHERE date(recorded_at) = date('now','localtime')").fetchone()[0]
 
-    def attendance_all(self):
-        rows = self._conn.execute(
-            """SELECT a.recorded_at, p.full_name, p.student_id, p.department
-               FROM attendance a JOIN people p ON p.id = a.person_id
-               ORDER BY a.recorded_at DESC LIMIT 500""").fetchall()
+    def attendance_all(self, limit=None):
+        sql = ("""SELECT a.recorded_at, p.full_name, p.student_id, p.department
+                  FROM attendance a JOIN people p ON p.id = a.person_id
+                  ORDER BY a.recorded_at DESC""")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        rows = self._conn.execute(sql).fetchall()
         return [dict(r) for r in rows]
 
     def export_attendance_csv(self, csv_path, today_only=True):
@@ -246,11 +248,9 @@ class Database:
     def integrity_check(self):
         """Return list of (label, ok) checks."""
         checks = []
-        try:
-            self._conn.execute("PRAGMA integrity_check").fetchone()
-            checks.append(("SQLite database readable & valid", True))
-        except sqlite3.Error:
-            checks.append(("SQLite database readable & valid", False))
+        row = self._conn.execute("PRAGMA integrity_check").fetchone()
+        ok = bool(row) and str(row[0]).strip().lower() == "ok"
+        checks.append(("SQLite database readable & valid", ok))
         checks.append(("People table accessible",
                        self._conn.execute("SELECT COUNT(*) FROM people").fetchone() is not None))
         checks.append(("Faces table accessible",
