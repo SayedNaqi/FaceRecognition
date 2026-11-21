@@ -8,19 +8,29 @@
 #         buttons, vector icons, Face-ID style scanning overlays.
 #         Everything is drawn in code (PIL / Tk canvas) — no asset files.
 #
+# Camera source (Settings → «منبع دوربین»): 0/1/2 = webcam · rtsp://user:pass@IP:554/… or
+#   http://IP:8080/video = security / IP camera · path to a video file = looped demo.
+#
 # Run:  python src/gui.py            (normal)
 #       python src/gui.py --smoketest  (build all screens then exit)
 # ============================================================
 
 import argparse
 import math
+import os
 import sys
+import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
+
+# Network cameras: force RTSP over TCP (no broken/grey frames) and keep latency low.
+# Must be set BEFORE OpenCV opens its first stream.
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS",
+                      "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay")
 
 import cv2
 import numpy as np
@@ -133,6 +143,158 @@ def tk_font(widget, size, bold=False):
     """Pixel-sized plain Tk font for canvas text (scaled for HiDPI)."""
     return tkfont.Font(family=FONT, size=-int(round(size * ui_scale(widget))),
                        weight="bold" if bold else "normal")
+
+
+# =====================================================
+# CAMERA SOURCES — webcam · IP / security camera (RTSP/HTTP) · video file
+# =====================================================
+# The "camera_index" setting may hold:
+#   0 / 1 / 2 …                         → local webcam
+#   rtsp://user:pass@192.168.1.10:554/… → security / IP camera (also http://…/video)
+#   C:/videos/demo.mp4                  → video file (looped; offline demo fallback)
+
+MAX_FRAME_W = 1280        # larger frames (1080p / 4K cameras) are scaled down for speed
+
+
+def parse_camera_source(raw):
+    """Return (kind, value): kind is 'index', 'stream' or 'file'."""
+    raw = ("0" if raw is None else str(raw)).strip().strip('"').strip("'")
+    if not raw:
+        return "index", 0
+    if raw.isdigit():
+        return "index", int(raw)
+    if "://" in raw:
+        return "stream", raw
+    return "file", raw
+
+
+class StreamCapture:
+    """Network camera reader running in a background thread.
+
+    A plain cv2.VideoCapture on RTSP buffers old frames, so the picture lags further and
+    further behind while the face engine is busy. This reader keeps only the newest frame.
+    read() -> (True, frame)  new frame
+              (True, None)   nothing new yet (still connecting / waiting)
+              (False, None)  connection failed or was lost
+    """
+    OPEN_TIMEOUT = 15.0
+
+    def __init__(self, url):
+        self._url = url
+        self._frame = None
+        self._seq = self._last_seq = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self.state = "connecting"            # connecting → live → lost | failed
+        self._t0 = time.time()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _open(self):
+        params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 8000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 8000]
+        try:
+            return cv2.VideoCapture(self._url, cv2.CAP_FFMPEG, params)
+        except (TypeError, cv2.error):          # older OpenCV without the params overload
+            return cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
+
+    def _run(self):
+        cap = None
+        try:
+            cap = self._open()
+            if not cap.isOpened():
+                self.state = "failed"
+                return
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+            misses = 0
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    misses += 1
+                    if misses >= 25:
+                        self.state = "lost" if self.state == "live" else "failed"
+                        return
+                    time.sleep(0.1)
+                    continue
+                misses = 0
+                with self._lock:
+                    self._frame, self._seq = frame, self._seq + 1
+                self.state = "live"
+        except Exception:
+            self.state = "lost" if self.state == "live" else "failed"
+        finally:
+            if cap is not None:
+                cap.release()
+
+    @property
+    def connecting(self):
+        return self.state == "connecting"
+
+    def isOpened(self):
+        return self.state != "failed"
+
+    def read(self):
+        if self.state in ("failed", "lost"):
+            return False, None
+        if self.state == "connecting" and time.time() - self._t0 > self.OPEN_TIMEOUT:
+            self.state = "failed"
+            return False, None
+        with self._lock:
+            if self._seq == self._last_seq:
+                return True, None
+            self._last_seq = self._seq
+            return True, self._frame
+
+    def release(self):
+        self._stop.set()
+
+
+class FileCapture:
+    """Video file played at its own frame rate and looped forever."""
+    connecting = False
+
+    def __init__(self, path):
+        self._cap = cv2.VideoCapture(path)
+        fps = self._cap.get(cv2.CAP_PROP_FPS) or 25.0
+        self._period = 1.0 / (fps if 5 <= fps <= 120 else 25.0)
+        self._next = 0.0
+
+    def isOpened(self):
+        return self._cap.isOpened()
+
+    def read(self):
+        now = time.time()
+        if now < self._next:
+            return True, None
+        self._next = now + self._period
+        ok, frame = self._cap.read()
+        if not ok:                                  # end of file → start over
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = self._cap.read()
+        return (True, frame) if ok else (False, None)
+
+    def release(self):
+        self._cap.release()
+
+
+def open_camera(raw):
+    """Open whatever the 'camera_index' setting describes."""
+    kind, value = parse_camera_source(raw)
+    if kind == "stream":
+        return StreamCapture(value)
+    if kind == "file":
+        return FileCapture(value)
+    return cv2.VideoCapture(value)
+
+
+def fit_frame(frame):
+    """Scale oversized frames down (keeps aspect ratio)."""
+    h, w = frame.shape[:2]
+    if w <= MAX_FRAME_W:
+        return frame
+    return cv2.resize(frame, (MAX_FRAME_W, max(1, int(h * MAX_FRAME_W / w))),
+                      interpolation=cv2.INTER_AREA)
 
 
 # =====================================================
@@ -1005,7 +1167,7 @@ class StatCard(ctk.CTkFrame):
 # =====================================================
 
 class FaceRecognitionApp(ctk.CTk):
-    VERSION = "3.0.0"
+    VERSION = "3.1.0"
 
     def __init__(self):
         super().__init__()
@@ -1026,6 +1188,9 @@ class FaceRecognitionApp(ctk.CTk):
         self._screens = {}
         self._dash_cam = None
         self._dash_running = False
+        self._dash_got_frame = False
+        self._engine_size = None
+        self._cam_testing = False
         self._enroll_cam = None
         self._enroll_state = None
         self._fps_history = []
@@ -1138,6 +1303,8 @@ class FaceRecognitionApp(ctk.CTk):
     def show_screen(self, name):
         if name != "dashboard":
             self._stop_dash_camera()
+        if name != "settings" and hasattr(self, "_cam_entry"):
+            self._save_camera_source()
         if name != "enroll":
             self._cancel_scan(silent=True)
 
@@ -1366,22 +1533,42 @@ class FaceRecognitionApp(ctk.CTk):
         else:
             self._start_dash_camera()
 
+    def _camera_source(self):
+        return self.db.get_setting("camera_index", "0")
+
+    def _prepare_frame(self, frame):
+        """Scale huge frames down and keep the detector's input size in sync."""
+        frame = fit_frame(frame)
+        size = (frame.shape[1], frame.shape[0])
+        if size != self._engine_size:
+            self._get_engine().set_input_size(*size)
+            self._engine_size = size
+        return frame
+
+    @staticmethod
+    def _connect_error():
+        messagebox.showerror(
+            "خطا", "اتصال به دوربین برقرار نشد.\n\n"
+                   "• وب‌کم: اتصال و اجازهٔ دسترسی را بررسی کنید.\n"
+                   "• دوربین امنیتی: آدرس RTSP، نام‌کاربری/رمز و اینکه کامپیوتر و دوربین "
+                   "در یک شبکه‌اند را بررسی کنید (در تنظیمات «تست اتصال» را بزنید).")
+
     def _start_dash_camera(self):
-        try:
-            cam_index = int(self.db.get_setting("camera_index", "0"))
-        except (ValueError, TypeError):
-            cam_index = 0
-        self._dash_cam = cv2.VideoCapture(cam_index)
+        self._dash_cam = open_camera(self._camera_source())
         if not self._dash_cam.isOpened():
+            self._dash_cam.release()
+            self._dash_cam = None
             self._status("دوربین باز نشد", ok=False)
-            messagebox.showerror("خطا", "دوربین باز نشد. اتصال و اجازهٔ دسترسی را بررسی کنید.")
+            self._connect_error()
             return
         self._dash_running = True
+        self._dash_got_frame = False
         self._cam_toggle_btn.configure(text="توقف دوربین", icon="stop", fg_color=GRAD_BAD,
                                        text_color="#ffffff")
         self._set_live(True)
         self._refresh_mean_embeddings()
-        self._status("دوربین روشن است")
+        self._status("در حال اتصال به دوربین…" if getattr(self._dash_cam, "connecting", False)
+                     else "دوربین روشن است")
         self._dash_loop()
 
     def _stop_dash_camera(self):
@@ -1404,9 +1591,24 @@ class FaceRecognitionApp(ctk.CTk):
             return
         ok, frame = self._dash_cam.read()
         if not ok:
-            self._status("خطا در خواندن فریم", ok=False)
+            first_try = not self._dash_got_frame
             self._stop_dash_camera()
+            if first_try:
+                self._status("دوربین باز نشد", ok=False)
+                self._connect_error()
+            else:
+                self._status("اتصال با دوربین قطع شد", ok=False)
+                self._toast("اتصال با دوربین قطع شد", ok=False)
             return
+        if frame is None:                      # stream still connecting / no new frame yet
+            if getattr(self._dash_cam, "connecting", False):
+                self._fps_label.configure(text="در حال اتصال به دوربین…")
+            self.after(15, self._dash_loop)
+            return
+        if not self._dash_got_frame:
+            self._dash_got_frame = True
+            self._status("دوربین روشن است")
+        frame = self._prepare_frame(frame)
 
         engine = self._get_engine()
         faces = engine.detect(frame)
@@ -1657,20 +1859,11 @@ class FaceRecognitionApp(ctk.CTk):
         data = self._validated_form()
         if data is None:
             return
-        try:
-            cam_index = int(self.db.get_setting("camera_index", "0"))
-        except (ValueError, TypeError):
-            cam_index = 0
-        self._enroll_cam = cv2.VideoCapture(cam_index)
+        self._enroll_cam = open_camera(self._camera_source())
         if not self._enroll_cam.isOpened():
             self._release_enroll_camera()
-            messagebox.showerror("خطا", "دوربین باز نشد.")
+            self._connect_error()
             return
-
-        width = int(self._enroll_cam.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(self._enroll_cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        engine = self._get_engine()
-        engine.set_input_size(width, height)
 
         self._enroll_state = {
             "person": data,
@@ -1679,6 +1872,7 @@ class FaceRecognitionApp(ctk.CTk):
             "counts": {z: 0 for z in ZONE_TARGETS},
             "last_capture": 0.0,
             "started": time.time(),
+            "got_frame": False,
         }
         self._scan_btn.configure(state="disabled")
         self._finish_btn.configure(state="disabled")
@@ -1698,6 +1892,15 @@ class FaceRecognitionApp(ctk.CTk):
             self._status("خطا در خواندن فریم", ok=False)
             self._cancel_scan()
             return
+        if frame is None:                      # stream still connecting / no new frame yet
+            if getattr(self._enroll_cam, "connecting", False):
+                self._scan_instruction.configure(text="در حال اتصال به دوربین…", text_color=WARN)
+            self.after(15, self._enroll_loop)
+            return
+        if not st["got_frame"]:
+            st["got_frame"] = True
+            st["started"] = time.time()        # the 40 s limit starts at the first picture
+        frame = self._prepare_frame(frame)
 
         engine = self._get_engine()
         faces = engine.detect(frame)
@@ -2171,22 +2374,39 @@ class FaceRecognitionApp(ctk.CTk):
         # --- camera & threshold (right column) ---
         card = self._card(scr, 22)
         card.grid(row=1, column=1, sticky="nsew", padx=(8, 6), pady=6)
-        self._card_header(card, "دوربین و آستانهٔ تطبیق", "منبع تصویر و میزان سخت‌گیری شناسایی",
+        self._card_header(card, "دوربین و آستانهٔ تطبیق", "وب‌کم یا دوربین امنیتی، و میزان سخت‌گیری شناسایی",
                           "camera", GRAD_MAIN)
 
         row1 = ctk.CTkFrame(card, fg_color="transparent")
         row1.pack(fill="x", padx=22, pady=(10, 4))
-        ctk.CTkLabel(row1, text="شمارهٔ دوربین", font=load_font(12, True),
+        ctk.CTkLabel(row1, text="منبع دوربین", font=load_font(12, True),
                      text_color=TEXT).pack(side="right")
-        saved_cam = self.db.get_setting("camera_index", "0")
-        cam_menu = ctk.CTkOptionMenu(
-            row1, values=["0", "1", "2", "3"], width=96, height=36, corner_radius=12,
-            fg_color=CARD_2, button_color=VIOLET, button_hover_color=VIOLET_HI,
-            dropdown_fg_color=CARD_2, dropdown_hover_color=CARD_3, dropdown_text_color=TEXT,
-            text_color=TEXT, font=load_font(12, True),
-            command=lambda v: self.db.set_setting("camera_index", v))
-        cam_menu.set(saved_cam)
-        cam_menu.pack(side="left")
+        for quick in ("2", "1", "0"):                       # one-click webcam presets
+            ctk.CTkButton(row1, text=quick, width=34, height=30, corner_radius=9,
+                          font=load_font(11, True), fg_color=CARD_2, hover_color=CARD_3,
+                          text_color=CYAN, border_width=1, border_color=BORDER,
+                          command=lambda q=quick: self._set_camera_source(q)).pack(
+                side="right", padx=(0, 6) if quick != "2" else (10, 6))
+        self._cam_test_btn = self._ghost_btn(row1, "تست اتصال", self._test_camera_source,
+                                             icon="camera", bg=CARD, width=130, height=34, size=11)
+        self._cam_test_btn.pack(side="left")
+        self._cam_entry = ctk.CTkEntry(
+            card, height=40, corner_radius=12, font=ctk.CTkFont(family="Consolas", size=12),
+            justify="left", fg_color=CARD_2, border_color=BORDER, border_width=1,
+            text_color=TEXT, placeholder_text="0    |    rtsp://user:pass@192.168.1.10:554/stream1",
+            placeholder_text_color=DIM)
+        self._cam_entry.pack(fill="x", padx=22, pady=(6, 2))
+        self._cam_entry.insert(0, str(self.db.get_setting("camera_index", "0")))
+        self._focus_glow(self._cam_entry)
+        self._cam_entry.bind("<KeyRelease>", lambda e: self._save_camera_source(), add="+")
+        self._cam_entry.bind("<FocusOut>", lambda e: self._save_camera_source(), add="+")
+        self._cam_status = ctk.CTkLabel(card, text=" ", font=load_font(10, True), text_color=MUTED,
+                                        wraplength=420, justify="right")
+        self._cam_status.pack(anchor="e", padx=22, pady=(2, 0))
+        ctk.CTkLabel(card, text="عدد = وب‌کم   ·   rtsp:// یا http:// = دوربین امنیتی (IP)   ·   "
+                                "مسیر فایل = ویدئوی آزمایشی (تکرار می‌شود)",
+                     font=load_font(10), text_color=DIM, wraplength=420,
+                     justify="right").pack(anchor="e", padx=22, pady=(0, 2))
 
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill="x", padx=22, pady=(16, 6))
@@ -2259,6 +2479,72 @@ class FaceRecognitionApp(ctk.CTk):
         self._pill(chips, "YuNet · تشخیص", CYAN, CYAN_BG, 10).pack(side="right", padx=4)
         self._pill(chips, "100٪ آفلاین", GOOD, GOOD_BG, 10).pack(side="right", padx=4)
         return scr
+
+    def _save_camera_source(self):
+        raw = self._cam_entry.get().strip() or "0"
+        if raw != self.db.get_setting("camera_index", "0"):
+            self.db.set_setting("camera_index", raw)
+
+    def _set_camera_source(self, raw):
+        self._cam_entry.delete(0, "end")
+        self._cam_entry.insert(0, raw)
+        self._save_camera_source()
+        self._cam_status.configure(text=" ")
+
+    def _test_camera_source(self):
+        """Try the configured source in a worker thread (never freezes the window)."""
+        if self._cam_testing:
+            return
+        self._save_camera_source()
+        raw = self._camera_source()
+        self._cam_testing = True
+        self._cam_test_btn.configure(state="disabled")
+        self._cam_status.configure(text="در حال اتصال… (تا ۲۰ ثانیه)", text_color=WARN)
+        result = {}
+
+        def work():
+            cam = None
+            try:
+                cam = open_camera(raw)
+                t0 = time.time()
+                while time.time() - t0 < 20 and cam.isOpened():
+                    ok, frame = cam.read()
+                    if not ok:
+                        break
+                    if frame is not None:
+                        result["size"] = (frame.shape[1], frame.shape[0])
+                        break
+                    time.sleep(0.05)
+            except Exception as exc:               # noqa: BLE001 — report, never crash the UI
+                result["err"] = str(exc)
+            finally:
+                if cam is not None:
+                    cam.release()
+                result["done"] = True
+
+        threading.Thread(target=work, daemon=True).start()
+
+        def poll():
+            if not result.get("done"):
+                self.after(150, poll)
+                return
+            self._cam_testing = False
+            try:
+                self._cam_test_btn.configure(state="normal")
+                if "size" in result:
+                    w, h = result["size"]
+                    note = (f"  —  برای سرعت به {MAX_FRAME_W} پیکسل عرض کوچک می‌شود"
+                            if w > MAX_FRAME_W else "")
+                    self._cam_status.configure(text=f"✓ متصل شد  —  رزولوشن {w}×{h}{note}",
+                                               text_color=GOOD)
+                else:
+                    self._cam_status.configure(
+                        text="✗ اتصال برقرار نشد — آدرس، نام‌کاربری/رمز و شبکه را بررسی کنید",
+                        text_color=BAD)
+            except tk.TclError:
+                pass
+
+        poll()
 
     def _on_threshold_change(self, value):
         self.db.set_setting("match_threshold", f"{float(value):.2f}")
