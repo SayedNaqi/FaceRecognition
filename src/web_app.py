@@ -25,7 +25,9 @@ from db import Database, PROFILES_DIR
 from face_engine import (
     COSINE_THRESHOLD,
     FaceEngine,
+    build_match_matrix,
     cosine_sim,
+    match_matrix,
     models_present,
 )
 
@@ -183,17 +185,14 @@ def api_recognize():
             people = {p["id"]: p for p in db.list_people()}
             threshold = float(db.get_setting("match_threshold",
                                              str(COSINE_THRESHOLD)))
+        ids, matrix = build_match_matrix(mean_emb)
         faces = engine.detect(frame)
 
     matches = []
     last_known = None
     for f in faces:
         feat = engine.embed(frame, f)
-        best_id, best_sim = None, 0.0
-        for pid, mean in mean_emb.items():
-            sim = cosine_sim(feat, mean)
-            if sim > best_sim:
-                best_id, best_sim = pid, sim
+        best_id, best_sim = match_matrix(feat, ids, matrix, threshold)
         known = best_id is not None and best_sim >= threshold
         person = people.get(best_id) if known else None
         matches.append({
@@ -206,13 +205,20 @@ def api_recognize():
             "dept": person.get("department") if person else None,
         })
         if known:
+            # attendance only after at least 2 confirmations (anti false positive)
             now = datetime.now()
             with _cache_lock:
-                last = _att_cache.get(best_id)
-                if not last or (now - last).total_seconds() >= 60:
+                entry = _att_cache.get(best_id)
+                if entry is None or (now - entry["last"]).total_seconds() > 3:
+                    entry = {"count": 0, "last": now, "logged": datetime.min}
+                entry["count"] += 1
+                entry["last"] = now
+                _att_cache[best_id] = entry
+                if (entry["count"] >= 2 and
+                        (now - entry["logged"]).total_seconds() >= 60):
                     with db_session() as db:
                         db.add_attendance(best_id)
-                    _att_cache[best_id] = now
+                    entry["logged"] = now
             last_known = {
                 "person_id": best_id,
                 "full_name": person["full_name"],

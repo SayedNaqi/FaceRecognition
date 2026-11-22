@@ -28,7 +28,9 @@ from db import Database, PROFILES_DIR
 from face_engine import (
     COSINE_THRESHOLD,
     FaceEngine,
+    build_match_matrix,
     cosine_sim,
+    match_matrix,
     models_present,
 )
 
@@ -81,12 +83,9 @@ def draw_footer(frame, text):
 
 
 def match_against_db(feat, mean_embeddings, people_by_id, threshold):
-    best_id, best_sim = None, 0.0
-    for pid, mean in mean_embeddings.items():
-        sim = cosine_sim(feat, mean)
-        if sim > best_sim:
-            best_id, best_sim = pid, sim
-    if best_id is not None and best_sim >= threshold:
+    ids, matrix = build_match_matrix(mean_embeddings)
+    best_id, best_sim = match_matrix(feat, ids, matrix, threshold)
+    if best_id is not None:
         person = people_by_id.get(best_id)
         name = person["full_name"] if person else str(best_id)
         return name, best_sim

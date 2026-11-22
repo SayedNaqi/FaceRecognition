@@ -28,6 +28,27 @@ def cosine_sim(a, b):
     return float(np.dot(a, b))
 
 
+def build_match_matrix(mean_embeddings):
+    """Convert {person_id: embedding} to (ids, N x 128 float32 matrix)."""
+    ids = list(mean_embeddings)
+    if not ids:
+        return [], np.zeros((0, 128), dtype=np.float32)
+    matrix = np.vstack([mean_embeddings[i] for i in ids]).astype(np.float32)
+    return ids, matrix
+
+
+def match_matrix(feat, ids, matrix, threshold=COSINE_THRESHOLD):
+    """Vectorized match over all enrolled people (one N x 128 dot product)."""
+    if not ids or matrix.shape[0] == 0:
+        return None, 0.0
+    sims = matrix @ feat
+    idx = int(np.argmax(sims))
+    best = float(sims[idx])
+    if best >= threshold:
+        return ids[idx], best
+    return None, best
+
+
 class FaceEngine:
     def __init__(self, input_size=(640, 480), score_threshold=0.9):
         if not models_present():

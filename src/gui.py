@@ -39,7 +39,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageTk
 
 from db import Database, PROFILES_DIR
-from face_engine import FaceEngine, COSINE_THRESHOLD, models_present, cosine_sim
+from face_engine import FaceEngine, COSINE_THRESHOLD, models_present, cosine_sim, build_match_matrix, match_matrix
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_IMAGE = PROJECT_ROOT / "data" / "images" / "test.jpg"
@@ -1615,13 +1615,10 @@ class FaceRecognitionApp(ctk.CTk):
         threshold = float(self.db.get_setting("match_threshold", COSINE_THRESHOLD))
 
         boxes, best_show = [], None
+        ids, matrix = build_match_matrix(self._mean_emb)
         for f in faces:
             feat = engine.embed(frame, f)
-            best_id, best_sim = None, 0.0
-            for pid, mean in self._mean_emb.items():
-                sim = cosine_sim(feat, mean)
-                if sim > best_sim:
-                    best_id, best_sim = pid, sim
+            best_id, best_sim = match_matrix(feat, ids, matrix, threshold)
             known = best_id is not None and best_sim >= threshold
             x, y, w, h = [int(v) for v in f[:4]]
             if known:
